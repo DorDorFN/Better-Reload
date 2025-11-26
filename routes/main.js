@@ -16,6 +16,35 @@ app.post("/fortnite/api/game/v2/chat/*/*/*/pc", (req, res) => {
     res.json(resp);
 });
 
+app.get("/api/v1/events/Fortnite/download/*", async (req, res) => {
+    const accountId = req.params.account_id;
+
+    try {
+        const playerData = await Arena.findOne({ accountId });
+        const hypePoints = playerData ? playerData.hype : 0;
+        const division = playerData ? playerData.division : 0;
+
+        const eventsDataPath = path.join(__dirname, "./../responses/eventlistactive.json");
+        const events = JSON.parse(fs.readFileSync(eventsDataPath, 'utf-8'));
+
+        events.player = {
+            accountId: accountId,
+            gameId: "Fortnite",
+            persistentScores: {
+                Hype: hypePoints
+            },
+            tokens: [`ARENA_S8_Division${division + 1}`]
+        };
+
+        res.json(events);
+
+    } catch (error) {
+        console.error("Error fetching Arena data:", error);
+        res.status(500).json({ message: "Internal Server Error" });
+    }
+});
+
+
 app.post("/fortnite/api/game/v2/tryPlayOnPlatform/account/*", (req, res) => {
     log.debug("POST /fortnite/api/game/v2/tryPlayOnPlatform/account/* called");
     res.setHeader("Content-Type", "text/plain");
@@ -310,6 +339,66 @@ app.all("/v1/epic-settings/public/users/*/values", async (req, res) => {
     const epicsettings = require("./../responses/epic-settings.json");
     res.json(epicsettings)
 })
+
+
+app.post("/datarouter/api/v1/public/data", async (req, res) => {
+    try {
+        const accountId = getAccountIdData(req.query.UserID);
+        const data = req.body.Events;
+
+        if (Array.isArray(data) && data.length > 0) {
+            const findUser = await User.findOne({ accountId });
+
+            if (findUser) {
+                for (const event of data) {
+                    const { EventName, ProviderType, PlayerKilledPlayerEventCount } = event;
+
+                    if (EventName && ProviderType === "Client") {
+                        const playerKills = Number(PlayerKilledPlayerEventCount) || 0;
+
+                        switch (EventName) {
+                            case "Athena.ClientWonMatch": // When a player wins a match
+
+                                await addVictoryHypePoints(findUser);
+
+                                console.log(`Added victory hype points for user: ${accountId}`);
+
+
+                                break;
+                            case "Combat.AthenaClientEngagement": // When a player kill someone
+
+                                for (let i = 0; i < playerKills; i++) {
+                                    await addEliminationHypePoints(findUser);
+                                    console.log(`Added elimination hype points for user: ${accountId}`);
+                                }
+
+                                break;
+
+                            case "Combat.ClientPlayerDeath": // When a player dies
+
+                                await deductBusFareHypePoints(findUser);
+
+                                console.log(`Deducted bus fare hype points for user: ${accountId}`);
+
+                                break;
+                            default:
+                                // log.debug(`Event List: ${EventName}`); // If you want to get all the events, remove the comment from here
+                                break;
+                        }
+                    }
+                }
+            } else {
+                console.log(`User not found: ${accountId}`);
+            }
+        }
+                res.status(204).end();
+    } catch (error) {
+        log.error("Error processing data:", error);
+        console.log("Error processing data:", error);
+        res.status(500).send("Internal Server Error");
+    }
+});
+
 
 app.get("/fortnite/api/game/v2/br-inventory/account/*", async (req, res) => {
     log.debug(`GET /fortnite/api/game/v2/br-inventory/account/${req.params.accountId} called`);
